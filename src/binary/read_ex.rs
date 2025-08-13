@@ -99,8 +99,9 @@ where
 
     fn read_str_into_buffer(&mut self, pool: &mut StringPool) -> Result<()> {
         let str_len = self.read_uvarint()? as usize;
-        let buffer = pool.allocate(str_len);
-        self.read_bytes(buffer)?;
+        let mut buffer = vec![0u8; str_len];
+        self.read_bytes(&mut buffer)?;
+        pool.store_data(buffer);
         Ok(())
     }
 }

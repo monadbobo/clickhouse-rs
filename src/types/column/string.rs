@@ -37,47 +37,14 @@ impl StringColumnData {
 
     pub(crate) fn load<T: ReadEx>(reader: &mut T, size: usize) -> Result<Self> {
         let mut data = Self::with_capacity(size);
-
         for _ in 0..size {
             reader.read_str_into_buffer(&mut data.pool)?;
         }
-
         Ok(data)
     }
 }
 
-// ...existing code...
-impl ColumnFrom for Vec<String> {
-    fn column_from<W: ColumnWrapper>(data: Self) -> W::Wrapper {
-        // CRITICAL: Use zero-copy StringPool creation
-        let pool = StringPool::from_strings_optimized(data);
-
-        let column_data = StringColumnData { pool };
-        W::wrap(column_data)
-    }
-}
-
-impl<'a> ColumnFrom for Vec<&'a str> {
-    fn column_from<W: ColumnWrapper>(source: Self) -> W::Wrapper {
-        // Convert to owned strings for zero-copy storage
-        let owned_strings: Vec<String> = source.into_iter().map(|s| s.to_string()).collect();
-        let pool = StringPool::from_strings_optimized(owned_strings);
-
-        let column_data = StringColumnData { pool };
-        W::wrap(column_data)
-    }
-}
-
-impl<'a> ColumnFrom for Vec<&'a [u8]> {
-    fn column_from<W: ColumnWrapper>(data: Self) -> W::Wrapper {
-        // Convert to owned Vec<u8> for zero-copy storage
-        let owned_vecs: Vec<Vec<u8>> = data.into_iter().map(|slice| slice.to_vec()).collect();
-        let pool = StringPool::from_byte_vecs(owned_vecs);
-
-        let column_data = StringColumnData { pool };
-        W::wrap(column_data)
-    }
-}
+// High-performance ColumnFrom implementations
 
 trait StringSource {
     fn into_value(self) -> Value;
@@ -101,40 +68,76 @@ impl StringSource for Vec<u8> {
     }
 }
 
+impl ColumnFrom for Vec<String> {
+    fn column_from<W: ColumnWrapper>(data: Self) -> W::Wrapper {
+        let pool = StringPool::from_strings_optimized(data);
+        let column_data = StringColumnData { pool };
+        W::wrap(column_data)
+    }
+}
+
+impl<'a> ColumnFrom for Vec<&'a str> {
+    fn column_from<W: ColumnWrapper>(source: Self) -> W::Wrapper {
+        let owned_strings: Vec<String> = source.into_iter().map(|s| s.to_string()).collect();
+        let pool = StringPool::from_strings_optimized(owned_strings);
+        let column_data = StringColumnData { pool };
+        W::wrap(column_data)
+    }
+}
+
+impl<'a> ColumnFrom for Vec<&'a [u8]> {
+    fn column_from<W: ColumnWrapper>(data: Self) -> W::Wrapper {
+        let owned_vecs: Vec<Vec<u8>> = data.into_iter().map(|slice| slice.to_vec()).collect();
+        let pool = StringPool::from_byte_vecs(owned_vecs);
+        let column_data = StringColumnData { pool };
+        W::wrap(column_data)
+    }
+}
+
 impl ColumnFrom for Vec<Vec<String>> {
     fn column_from<W: ColumnWrapper>(source: Self) -> <W as ColumnWrapper>::Wrapper {
-        make_array_of_array::<W, String>(source)
+        let fake: Vec<String> = Vec::with_capacity(source.len());
+        let inner = Vec::column_from::<ArcColumnWrapper>(fake);
+        let sql_type = inner.sql_type();
+
+        let mut data = ArrayColumnData {
+            inner,
+            offsets: List::with_capacity(source.len()),
+        };
+
+        for vs in source {
+            let mut inner = Vec::with_capacity(vs.len());
+            for v in vs {
+                inner.push(Value::String(Arc::new(v.into_bytes())));
+            }
+            data.push(Value::Array(sql_type.clone().into(), Arc::new(inner)));
+        }
+
+        W::wrap(data)
     }
 }
 
 impl ColumnFrom for Vec<Vec<&str>> {
     fn column_from<W: ColumnWrapper>(source: Self) -> <W as ColumnWrapper>::Wrapper {
-        make_array_of_array::<W, &str>(source)
-    }
-}
+        let fake: Vec<String> = Vec::with_capacity(source.len());
+        let inner = Vec::column_from::<ArcColumnWrapper>(fake);
+        let sql_type = inner.sql_type();
 
-fn make_array_of_array<W: ColumnWrapper, S: StringSource>(
-    source: Vec<Vec<S>>,
-) -> <W as ColumnWrapper>::Wrapper {
-    let fake: Vec<String> = Vec::with_capacity(source.len());
-    let inner = Vec::column_from::<ArcColumnWrapper>(fake);
-    let sql_type = inner.sql_type();
+        let mut data = ArrayColumnData {
+            inner,
+            offsets: List::with_capacity(source.len()),
+        };
 
-    let mut data = ArrayColumnData {
-        inner,
-        offsets: List::with_capacity(source.len()),
-    };
-
-    for vs in source {
-        let mut inner = Vec::with_capacity(vs.len());
-        for v in vs {
-            let value: Value = v.into_value();
-            inner.push(value)
+        for vs in source {
+            let mut inner = Vec::with_capacity(vs.len());
+            for v in vs {
+                inner.push(Value::String(Arc::new(v.as_bytes().to_vec())));
+            }
+            data.push(Value::Array(sql_type.clone().into(), Arc::new(inner)));
         }
-        data.push(Value::Array(sql_type.clone().into(), Arc::new(inner)));
-    }
 
-    W::wrap(data)
+        W::wrap(data)
+    }
 }
 
 impl ColumnFrom for Vec<Option<Vec<u8>>> {
