@@ -328,19 +328,24 @@ impl<K: ColumnType> Block<K> {
 
     pub(crate) fn write(&self, encoder: &mut Encoder, compress: bool) {
         if compress {
-            let mut tmp_encoder = Encoder::new();
+            // Estimate the uncompressed size to pre-allocate efficiently
+            let estimated_size = self.estimate_serialized_size();
+            let mut tmp_encoder = Encoder::with_capacity(estimated_size);
             self.write(&mut tmp_encoder, false);
             let tmp = tmp_encoder.get_buffer();
 
-            let mut buf = Vec::new();
+            // Pre-allocate compression buffer based on input size
+            let compression_bound = unsafe { LZ4_compressBound(tmp.len() as i32) as usize };
+            let mut buf = Vec::with_capacity(9 + compression_bound);
+            buf.resize(9 + compression_bound, 0_u8);
+            
             let size;
             unsafe {
-                buf.resize(9 + LZ4_compressBound(tmp.len() as i32) as usize, 0_u8);
                 size = LZ4_compress_default(
                     tmp.as_ptr() as *const c_char,
                     (buf.as_mut_ptr() as *mut c_char).add(9),
                     tmp.len() as i32,
-                    buf.len() as i32,
+                    (buf.len() - 9) as i32,
                 );
             }
             buf.resize(9 + size as usize, 0_u8);
@@ -366,6 +371,19 @@ impl<K: ColumnType> Block<K> {
                 column.write(encoder);
             }
         }
+    }
+
+    /// Estimate the serialized size to pre-allocate buffers efficiently
+    fn estimate_serialized_size(&self) -> usize {
+        let mut estimated_size = 32; // Base overhead for block info and counts
+        
+        for column in &self.columns {
+            // Estimate each column's size based on its type and row count
+            estimated_size += column.estimate_serialized_size();
+        }
+        
+        // Add 25% buffer for safety
+        estimated_size + (estimated_size >> 2)
     }
 
     pub(crate) fn send_data(&self, encoder: &mut Encoder, compress: bool) {

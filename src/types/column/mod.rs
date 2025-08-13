@@ -212,6 +212,17 @@ impl<K: ColumnType> Column<K> {
         self.data.save(encoder, 0, len);
     }
 
+    /// Estimate the serialized size for memory allocation optimization
+    pub(crate) fn estimate_serialized_size(&self) -> usize {
+        let name_size = self.name.len() + 8; // String length + some overhead
+        let type_name = self.data.sql_type().to_string();
+        let type_size = type_name.len() + 8; // String length + some overhead
+        // Use default estimation for now to avoid trait issues
+        let data_size = self.data.len() * 8 + 128; // Conservative estimate
+        
+        name_size + type_size + data_size
+    }
+
     #[inline(always)]
     pub(crate) fn len(&self) -> usize {
         self.data.len()

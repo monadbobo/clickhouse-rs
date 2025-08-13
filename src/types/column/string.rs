@@ -264,7 +264,9 @@ impl<K: ColumnType> ColumnData for StringAdapter<K> {
     }
 
     fn clone_instance(&self) -> BoxColumnData {
-        unimplemented!()
+        Box::new(Self {
+            column: self.column.clone(),
+        })
     }
 
     fn get_timezone(&self) -> Option<Tz> {
