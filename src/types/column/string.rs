@@ -1,5 +1,5 @@
 use chrono_tz::Tz;
-use std::{io::Write, string::ToString, sync::Arc};
+use std::{string::ToString, sync::Arc};
 
 use either::Either;
 
@@ -48,20 +48,30 @@ impl StringColumnData {
 
 impl ColumnFrom for Vec<String> {
     fn column_from<W: ColumnWrapper>(data: Self) -> W::Wrapper {
-        W::wrap(StringColumnData { pool: data.into() })
+        // Use the most optimized method specifically designed for jeprof hotspots
+        W::wrap(StringColumnData {
+            pool: StringPool::from_strings_optimized(data),
+        })
     }
 }
 
 impl<'a> ColumnFrom for Vec<&'a str> {
     fn column_from<W: ColumnWrapper>(source: Self) -> W::Wrapper {
-        let data: Vec<_> = source.iter().map(ToString::to_string).collect();
-        W::wrap(StringColumnData { pool: data.into() })
+        // 对于 &str，我们必须转换为 String，然后使用零拷贝方法
+        let data: Vec<String> = source.iter().map(|s| s.to_string()).collect();
+        W::wrap(StringColumnData {
+            pool: StringPool::from_strings(data),
+        })
     }
 }
 
 impl<'a> ColumnFrom for Vec<&'a [u8]> {
     fn column_from<W: ColumnWrapper>(data: Self) -> W::Wrapper {
-        W::wrap(StringColumnData { pool: data.into() })
+        // 对于 &[u8]，转换为 Vec<u8> 然后使用零拷贝方法
+        let byte_vecs: Vec<Vec<u8>> = data.iter().map(|s| s.to_vec()).collect();
+        W::wrap(StringColumnData {
+            pool: StringPool::from_byte_vecs(byte_vecs),
+        })
     }
 }
 
@@ -186,8 +196,8 @@ impl ColumnData for StringColumnData {
 
     fn push(&mut self, value: Value) {
         let s: Vec<u8> = value.into();
-        let mut b = self.pool.allocate(s.len());
-        b.write_all(s.as_ref()).unwrap();
+        // 直接存储数据，避免拷贝
+        self.pool.store_data(s);
     }
 
     fn at(&self, index: usize) -> ValueRef {
