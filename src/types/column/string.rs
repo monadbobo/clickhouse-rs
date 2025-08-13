@@ -46,32 +46,36 @@ impl StringColumnData {
     }
 }
 
+// ...existing code...
 impl ColumnFrom for Vec<String> {
     fn column_from<W: ColumnWrapper>(data: Self) -> W::Wrapper {
-        // Use the most optimized method specifically designed for jeprof hotspots
-        W::wrap(StringColumnData {
-            pool: StringPool::from_strings_optimized(data),
-        })
+        // CRITICAL: Use zero-copy StringPool creation
+        let pool = StringPool::from_strings_optimized(data);
+
+        let column_data = StringColumnData { pool };
+        W::wrap(column_data)
     }
 }
 
 impl<'a> ColumnFrom for Vec<&'a str> {
     fn column_from<W: ColumnWrapper>(source: Self) -> W::Wrapper {
-        // 对于 &str，我们必须转换为 String，然后使用零拷贝方法
-        let data: Vec<String> = source.iter().map(|s| s.to_string()).collect();
-        W::wrap(StringColumnData {
-            pool: StringPool::from_strings(data),
-        })
+        // Convert to owned strings for zero-copy storage
+        let owned_strings: Vec<String> = source.into_iter().map(|s| s.to_string()).collect();
+        let pool = StringPool::from_strings_optimized(owned_strings);
+
+        let column_data = StringColumnData { pool };
+        W::wrap(column_data)
     }
 }
 
 impl<'a> ColumnFrom for Vec<&'a [u8]> {
     fn column_from<W: ColumnWrapper>(data: Self) -> W::Wrapper {
-        // 对于 &[u8]，转换为 Vec<u8> 然后使用零拷贝方法
-        let byte_vecs: Vec<Vec<u8>> = data.iter().map(|s| s.to_vec()).collect();
-        W::wrap(StringColumnData {
-            pool: StringPool::from_byte_vecs(byte_vecs),
-        })
+        // Convert to owned Vec<u8> for zero-copy storage
+        let owned_vecs: Vec<Vec<u8>> = data.into_iter().map(|slice| slice.to_vec()).collect();
+        let pool = StringPool::from_byte_vecs(owned_vecs);
+
+        let column_data = StringColumnData { pool };
+        W::wrap(column_data)
     }
 }
 

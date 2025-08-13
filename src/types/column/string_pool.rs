@@ -390,39 +390,56 @@ impl StringPool {
     // 高效地存储数据，避免额外拷贝
     pub(crate) fn store_data(&mut self, data: Vec<u8>) -> &[u8] {
         let len = data.len();
+        let chunk_index = self.chunks.len();
 
-        if len >= LARGE_STRING_THRESHOLD {
-            // 大字符串独立存储
-            let chunk_index = self.chunks.len();
-            self.chunks.push(StorageType::Dedicated(data));
+        // CRITICAL: Use zero-copy storage - never call allocate()
+        // Directly store the Vec<u8> as-is to avoid any copying
+        self.chunks.push(StorageType::ZeroCopy(data));
 
-            self.pointers.push(StringPtr {
-                chunk: chunk_index,
-                shift: 0,
-                len,
-            });
+        self.pointers.push(StringPtr {
+            chunk: chunk_index,
+            shift: 0,
+            len,
+        });
 
-            // 返回刚存储的数据引用
-            if let StorageType::Dedicated(ref vec) = &self.chunks[chunk_index] {
-                return vec.as_slice();
-            }
-        } else {
-            // 小字符串尝试放入连续存储
-            if self.can_fit_in_current_chunk(len) {
-                return self.store_in_current_chunk(data);
-            } else {
-                self.allocate_new_chunk();
-                return self.store_in_current_chunk(data);
-            }
+        // Return reference to the stored data
+        if let StorageType::ZeroCopy(ref vec) = &self.chunks[chunk_index] {
+            return vec.as_slice();
         }
 
         unreachable!()
     }
 
-    // 兼容原有的allocate接口（用于需要write的场景）
+    /// Batch store multiple Vec<u8> with zero allocation overhead
+    /// This completely bypasses the allocate() code path
+    pub(crate) fn store_batch(&mut self, data_vec: Vec<Vec<u8>>) {
+        let start_chunk = self.chunks.len();
+        self.chunks.reserve(data_vec.len());
+        self.pointers.reserve(data_vec.len());
+
+        for (i, data) in data_vec.into_iter().enumerate() {
+            let len = data.len();
+
+            // Zero-copy storage - direct ownership transfer
+            self.chunks.push(StorageType::ZeroCopy(data));
+            self.pointers.push(StringPtr {
+                chunk: start_chunk + i,
+                shift: 0,
+                len,
+            });
+        }
+    }
+
+    /// DEPRECATED: This method should not be used for new code
+    /// It's kept only for backward compatibility
+    /// Use store_data() instead to avoid memory allocations
+    #[deprecated(note = "Use store_data() for better performance")]
     pub(crate) fn allocate(&mut self, size: usize) -> &mut [u8] {
+        // Add warning when this method is called
+        eprintln!("WARNING: allocate() called - this creates allocation hotspots. Use store_data() instead.");
+
         if size >= LARGE_STRING_THRESHOLD {
-            // 大字符串独立分配
+            // Large string independent allocation
             let chunk_index = self.chunks.len();
             self.chunks.push(StorageType::Dedicated(vec![0; size]));
 
@@ -436,7 +453,7 @@ impl StringPool {
                 return vec.as_mut_slice();
             }
         } else {
-            // 小字符串放入连续存储
+            // Small string continuous storage
             if !self.can_fit_in_current_chunk(size) {
                 self.allocate_new_chunk();
             }
