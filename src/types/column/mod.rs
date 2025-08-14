@@ -219,7 +219,7 @@ impl<K: ColumnType> Column<K> {
         let type_size = type_name.len() + 8; // String length + some overhead
         // Use default estimation for now to avoid trait issues
         let data_size = self.data.len() * 8 + 128; // Conservative estimate
-        
+
         name_size + type_size + data_size
     }
 

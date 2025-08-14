@@ -9,12 +9,12 @@ pub struct ObjectPool<T> {
     factory: Box<dyn Fn() -> T + Send + Sync>,
 }
 
-impl<T> ObjectPool<T> 
-where 
+impl<T> ObjectPool<T>
+where
     T: Send + 'static,
 {
-    pub fn new<F>(max_size: usize, factory: F) -> Self 
-    where 
+    pub fn new<F>(max_size: usize, factory: F) -> Self
+    where
         F: Fn() -> T + Send + Sync + 'static,
     {
         Self {
@@ -27,7 +27,7 @@ where
     pub fn get(&self) -> PooledObject<T> {
         let mut objects = self.objects.lock().unwrap();
         let object = objects.pop_front().unwrap_or_else(|| (self.factory)());
-        
+
         PooledObject {
             object: Some(object),
             pool: Arc::clone(&self.objects),
@@ -101,7 +101,7 @@ pub fn get_pooled_encoder() -> PooledObject<Encoder> {
     let pool = ENCODER_POOL.get_or_init(|| {
         ObjectPool::new(16, || Encoder::new()) // Pool of 16 encoders
     });
-    
+
     let mut encoder = pool.get();
     encoder.reset(); // Reset for reuse
     encoder

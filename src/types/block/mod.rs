@@ -338,7 +338,7 @@ impl<K: ColumnType> Block<K> {
             let compression_bound = unsafe { LZ4_compressBound(tmp.len() as i32) as usize };
             let mut buf = Vec::with_capacity(9 + compression_bound);
             buf.resize(9 + compression_bound, 0_u8);
-            
+
             let size;
             unsafe {
                 size = LZ4_compress_default(
@@ -376,12 +376,12 @@ impl<K: ColumnType> Block<K> {
     /// Estimate the serialized size to pre-allocate buffers efficiently
     fn estimate_serialized_size(&self) -> usize {
         let mut estimated_size = 32; // Base overhead for block info and counts
-        
+
         for column in &self.columns {
             // Estimate each column's size based on its type and row count
             estimated_size += column.estimate_serialized_size();
         }
-        
+
         // Add 25% buffer for safety
         estimated_size + (estimated_size >> 2)
     }

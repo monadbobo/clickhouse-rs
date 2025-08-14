@@ -80,20 +80,29 @@ impl StringPool {
             return StringPool::with_capacity(0);
         }
 
+        // 快速路径：检查是否所有字符串都很小，如果是则使用连续存储
         let total_size: usize = source.iter().map(|s| s.as_ref().len()).sum();
-        let mut packed_data: Vec<u8> = Vec::with_capacity(total_size);
-        let mut pointers = Vec::with_capacity(count);
-        let mut offset = 0;
+        const SMALL_STRING_THRESHOLD: usize = 32;
+        const CONTINUOUS_STORAGE_LIMIT: usize = 8192; // 8KB
 
-        unsafe {
+        let use_continuous = total_size <= CONTINUOUS_STORAGE_LIMIT
+            && source
+                .iter()
+                .all(|s| s.as_ref().len() <= SMALL_STRING_THRESHOLD);
+
+        if use_continuous {
+            // 连续存储小字符串，更好的缓存局部性
+            let mut packed_data = Vec::with_capacity(total_size);
+            let mut pointers = Vec::with_capacity(count);
+            let mut offset = 0;
+
+            // 安全的批量拷贝
             for item in source {
                 let slice = item.as_ref();
                 let len = slice.len();
 
                 if len > 0 {
-                    let dest_ptr = packed_data.as_mut_ptr().add(packed_data.len());
-                    std::ptr::copy_nonoverlapping(slice.as_ptr(), dest_ptr, len);
-                    packed_data.set_len(packed_data.len() + len);
+                    packed_data.extend_from_slice(slice);
                 }
 
                 pointers.push(StringPtr {
@@ -103,11 +112,30 @@ impl StringPool {
                 });
                 offset += len;
             }
-        }
 
-        StringPool {
-            chunks: vec![StorageType::Continuous(packed_data)],
-            pointers,
+            StringPool {
+                chunks: vec![StorageType::Continuous(packed_data)],
+                pointers,
+            }
+        } else {
+            // 分离存储大字符串，避免内存浪费
+            let mut chunks = Vec::with_capacity(count);
+            let mut pointers = Vec::with_capacity(count);
+
+            for (index, item) in source.into_iter().enumerate() {
+                let slice = item.as_ref();
+                let len = slice.len();
+                let bytes = slice.to_vec();
+
+                chunks.push(StorageType::ZeroCopy(bytes));
+                pointers.push(StringPtr {
+                    chunk: index,
+                    shift: 0,
+                    len,
+                });
+            }
+
+            StringPool { chunks, pointers }
         }
     }
 
@@ -118,24 +146,24 @@ impl StringPool {
             return StringPool::with_capacity(0);
         }
 
-        let mut pool = StringPool {
-            chunks: Vec::with_capacity(capacity),
-            pointers: Vec::with_capacity(capacity),
-        };
+        // 预分配精确容量，避免重新分配
+        let mut chunks = Vec::with_capacity(capacity);
+        let mut pointers = Vec::with_capacity(capacity);
 
+        // 批量处理避免多次push的开销
         for (index, string) in source.into_iter().enumerate() {
             let len = string.len();
             let bytes = string.into_bytes();
 
-            pool.chunks.push(StorageType::ZeroCopy(bytes));
-            pool.pointers.push(StringPtr {
+            chunks.push(StorageType::ZeroCopy(bytes));
+            pointers.push(StringPtr {
                 chunk: index,
                 shift: 0,
                 len,
             });
         }
 
-        pool
+        StringPool { chunks, pointers }
     }
 
     /// High-performance creation from Vec<Vec<u8>> with zero-copy
@@ -145,23 +173,23 @@ impl StringPool {
             return StringPool::with_capacity(0);
         }
 
-        let mut pool = StringPool {
-            chunks: Vec::with_capacity(capacity),
-            pointers: Vec::with_capacity(capacity),
-        };
+        // 预分配精确容量，避免重新分配
+        let mut chunks = Vec::with_capacity(capacity);
+        let mut pointers = Vec::with_capacity(capacity);
 
+        // 批量处理避免多次push的开销
         for (index, bytes) in source.into_iter().enumerate() {
             let len = bytes.len();
 
-            pool.chunks.push(StorageType::ZeroCopy(bytes));
-            pool.pointers.push(StringPtr {
+            chunks.push(StorageType::ZeroCopy(bytes));
+            pointers.push(StringPtr {
                 chunk: index,
                 shift: 0,
                 len,
             });
         }
 
-        pool
+        StringPool { chunks, pointers }
     }
 
     pub(crate) fn with_capacity(capacity: usize) -> StringPool {
@@ -171,11 +199,34 @@ impl StringPool {
         }
     }
 
+    /// 创建具有预分配容量的字符串池，避免后续重新分配
+    pub(crate) fn with_capacity_and_size(
+        capacity: usize,
+        estimated_total_size: usize,
+    ) -> StringPool {
+        // 如果预计总大小较小，使用连续存储
+        if estimated_total_size <= 8192 {
+            StringPool {
+                pointers: Vec::with_capacity(capacity),
+                chunks: vec![StorageType::Continuous(Vec::with_capacity(
+                    estimated_total_size,
+                ))],
+            }
+        } else {
+            StringPool {
+                pointers: Vec::with_capacity(capacity),
+                chunks: Vec::with_capacity(capacity),
+            }
+        }
+    }
+
     /// High-efficiency data storage - the core method that replaces allocate()
+    /// 使用零拷贝策略，避免内存拷贝开销
     pub(crate) fn store_data(&mut self, data: Vec<u8>) -> &[u8] {
         let len = data.len();
         let chunk_index = self.chunks.len();
 
+        // 直接使用零拷贝存储，避免复杂的借用检查
         self.chunks.push(StorageType::ZeroCopy(data));
         self.pointers.push(StringPtr {
             chunk: chunk_index,
@@ -183,10 +234,8 @@ impl StringPool {
             len,
         });
 
-        if let StorageType::ZeroCopy(ref vec) = &self.chunks[chunk_index] {
-            return vec.as_slice();
-        }
-        unreachable!()
+        // 通过get方法安全地获取引用
+        self.get(self.pointers.len() - 1)
     }
 
     #[inline(always)]

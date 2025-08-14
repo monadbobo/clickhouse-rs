@@ -31,7 +31,7 @@ impl BufferPool {
     /// Get a buffer from the pool or create a new one
     pub fn get_buffer(&self, min_capacity: usize) -> PooledBuffer {
         let mut pool = self.pool.lock().unwrap();
-        
+
         // Try to find a suitable buffer from the pool
         let mut buffer = pool
             .iter()
@@ -43,7 +43,7 @@ impl BufferPool {
             });
 
         buffer.clear();
-        
+
         PooledBuffer {
             buffer,
             pool: Arc::clone(&self.pool),
@@ -85,9 +85,9 @@ impl PooledBuffer {
 impl Drop for PooledBuffer {
     fn drop(&mut self) {
         // Return buffer to pool if it's a reasonable size and pool isn't full
-        if self.buffer.capacity() >= BufferPool::MIN_BUFFER_SIZE 
+        if self.buffer.capacity() >= BufferPool::MIN_BUFFER_SIZE
             && self.buffer.capacity() <= BufferPool::MAX_BUFFER_SIZE {
-            
+
             let mut pool = self.pool.lock().unwrap();
             if pool.len() < self.max_pool_size {
                 self.buffer.clear();

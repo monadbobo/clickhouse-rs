@@ -16,15 +16,15 @@ pub struct Encoder {
 
 impl Encoder {
     pub fn new() -> Self {
-        Encoder { 
-            buffer: Vec::with_capacity(DEFAULT_BUFFER_CAPACITY) 
+        Encoder {
+            buffer: Vec::with_capacity(DEFAULT_BUFFER_CAPACITY),
         }
     }
 
     /// Create encoder with specific capacity hint
     pub fn with_capacity(capacity: usize) -> Self {
         Encoder {
-            buffer: Vec::with_capacity(capacity.max(DEFAULT_BUFFER_CAPACITY))
+            buffer: Vec::with_capacity(capacity.max(DEFAULT_BUFFER_CAPACITY)),
         }
     }
 
@@ -58,7 +58,7 @@ impl Encoder {
     #[inline(always)]
     pub fn write_bytes(&mut self, b: &[u8]) {
         let needed_capacity = self.buffer.len() + b.len();
-        
+
         // Smart growth: only reserve if we need significantly more space
         if needed_capacity > self.buffer.capacity() {
             let new_capacity = if b.len() > GROWTH_THRESHOLD {
@@ -70,7 +70,7 @@ impl Encoder {
             };
             self.buffer.reserve(new_capacity - self.buffer.capacity());
         }
-        
+
         self.buffer.extend_from_slice(b);
     }
 
